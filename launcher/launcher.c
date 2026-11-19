@@ -5,6 +5,10 @@
 #include <string.h>
 #include <time.h>
 
+#ifdef _MSC_VER
+#pragma comment(lib, "user32.lib") /* MessageBoxA: not linked by default under MSVC */
+#endif
+
 #define MAX_PROFILE (64 * 1024)
 #define MAX_LEVELS 8192
 #define MAX_ADDR 64
