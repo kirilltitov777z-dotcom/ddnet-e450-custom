@@ -1,0 +1,118 @@
+name: DDNet E-450 Custom Build
+
+on:
+  workflow_dispatch:
+    inputs:
+      publish_release:
+        description: 'Publish GitHub Release with the exe'
+        type: boolean
+        default: false
+  push:
+    branches: [main, master]
+
+permissions:
+  contents: write
+
+env:
+  DDNET_VERSION: 20.2.1
+
+jobs:
+  build:
+    runs-on: windows-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Download official DDNet
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $Url = "https://ddnet.org/downloads/DDNet-$env:DDNET_VERSION-win64.zip"
+          Invoke-WebRequest -Uri $Url -OutFile ddnet.zip -UserAgent 'Mozilla/5.0' -UseBasicParsing
+          if ((Get-Item ddnet.zip).Length -lt 5MB) { throw 'DDNet download looks broken' }
+          Expand-Archive -Path ddnet.zip -DestinationPath ddnet_src -Force
+
+      - name: Setup MSVC (x64)
+        uses: ilammy/msvc-dev-cmd@v1
+        with:
+          arch: x64
+
+      - name: Build custom launcher exe
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          rem C launcher: no STL, builds fast everywhere. /TC = compile as C.
+          cl /nologo /TC /O2 /MT /Fe:DDNet-Custom-Launcher.exe launcher\launcher.c
+          if ($LASTEXITCODE -ne 0) { throw 'Launcher build failed' }
+
+      - name: Generate endless level list
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $Page = (Invoke-WebRequest -Uri 'https://ddnet.org/status/?lang=en' -UseBasicParsing -UserAgent 'Mozilla/5.0').Content
+          $Addrs = [regex]::Matches($Page, '\b(?:\d{1,3}\.){3}\d{1,3}:\d{4,5}\b') |
+              ForEach-Object { $_.Value } | Sort-Object -Unique
+          if ($Addrs.Count -lt 20) { throw "Expected many DDNet servers, got $($Addrs.Count)" }
+          $Lines = @('# Auto-generated: official DDNet servers = hundreds of maps')
+          $Lines += $Addrs | ForEach-Object { "$_|DDNet" }
+          $Lines | Set-Content -Encoding UTF8 infinite-levels.txt
+          Write-Host "Servers in rotation: $($Addrs.Count)"
+
+      - name: Assemble package
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $GameExe = Get-ChildItem -Path ddnet_src -Recurse -Filter 'DDNet.exe' | Select-Object -First 1
+          if (-not $GameExe) { throw 'DDNet.exe not found in downloaded archive' }
+          $GameRoot = Split-Path $GameExe.FullName -Parent
+
+          New-Item -ItemType Directory -Force -Path dist | Out-Null
+          Copy-Item "$GameRoot\*" dist -Recurse -Force
+          Copy-Item DDNet-Custom-Launcher.exe dist -Force
+          Copy-Item infinite-levels.txt dist -Force
+          Copy-Item autoexec_client.cfg dist -Force
+          Copy-Item profiles dist\profiles -Recurse -Force
+          Copy-Item START.bat,STOP.cmd dist -Force
+
+          # Normalize batch line endings for cmd.exe
+          foreach ($Bat in @('START.bat','STOP.cmd')) {
+            $Text = (Get-Content "dist\$Bat") -join "`r`n"
+            Set-Content -NoNewline "dist\$Bat" -Value $Text
+          }
+
+          $Readme = @(
+            'DDNet E-450 Custom',
+            '',
+            '1) Run START.bat  -> max FPS profile, endless server/map rotation.',
+            '2) Run DDNet-Custom-Launcher.exe --beauty -> "1000" pretty profile.',
+            '3) Run STOP.cmd then close DDNet -> launcher exits instead of next level.',
+            '',
+            'Config is copied to %APPDATA%\DDNet\autoexec_client.cfg by START.bat.',
+            'Edit profiles\fast.cfg and profiles\beauty1000.cfg to tune FPS/looks.',
+            '',
+            "Base game: official DDNet $env:DDNET_VERSION (64-bit)."
+          )
+          $Readme | Set-Content -Encoding UTF8 dist\README.txt
+
+      - name: Zip artifact
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          Compress-Archive -Path dist\* -DestinationPath DDNet-E450-Custom.zip -Force
+          Get-Item DDNet-E450-Custom.zip | Select-Object Name,Length
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: DDNet-E450-Custom
+          path: DDNet-E450-Custom.zip
+          if-no-files-found: error
+
+      - name: Publish release
+        if: github.event_name == 'workflow_dispatch' && inputs.publish_release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ddnet-e450-custom-${{ env.DDNET_VERSION }}
+          name: DDNet E-450 Custom
+          body: 'Custom DDNet build: 100+ FPS profile, "1000" look profile, endless level rotation. Built by GitHub Actions.'
+          files: DDNet-E450-Custom.zip

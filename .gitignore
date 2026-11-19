@@ -1,0 +1,12 @@
+# Built/downloaded game package (assembled by GitHub Actions, not source)
+DDNet-Portable/
+*.zip
+
+# Runtime files
+stop.flag
+launch_rotation.cfg
+
+# Python/Junk
+__pycache__/
+*.pyc
+.DS_Store
